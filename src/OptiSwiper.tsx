@@ -11,13 +11,17 @@ import React, {
 
 import {
   buildInViewportPayload,
+  buildNavButtonPayload,
+  buildPaginationClickPayload,
   buildReachedEndPayload,
   buildSlidePayload,
   buildViewedSlidesPayload,
   mergeHandlers,
 } from "./analytics/analytics";
 import { useViewedSlides } from "./hooks/useViewedSlides";
+import { Navigation } from "./Navigation";
 import { OptiSlide } from "./OptiSlide";
+import { Pagination } from "./Pagination";
 import { SwiperContext } from "./swiperContext";
 import type { OptiSwiperProps, SlideData } from "./types";
 import { getSnapIndex } from "./utils/swipe";
@@ -35,6 +39,9 @@ export function OptiSwiper({
   analytics,
   slidesPerView = 1,
   viewedTimeout = DEFAULT_VIEWED_TIMEOUT,
+  autoScroll,
+  navigation,
+  pagination,
 }: OptiSwiperProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -48,7 +55,6 @@ export function OptiSwiper({
   const slideCountRef = useRef(slideCount);
   slideCountRef.current = slideCount;
 
-  // Maximum scrollable index: with slidesPerView=3 and 6 slides → maxIndex=3
   const maxIndex = Math.max(0, slideCount - slidesPerView);
   const maxIndexRef = useRef(maxIndex);
   maxIndexRef.current = maxIndex;
@@ -120,12 +126,11 @@ export function OptiSwiper({
     const w = Math.floor(
       containerRef.current.offsetWidth / slidesPerViewRef.current,
     );
-    if (w === slideWidthRef.current) return; // no change — skip re-render
+    if (w === slideWidthRef.current) return;
     slideWidthRef.current = w;
     setSlideWidth(w);
   }, []);
 
-  // Measure on mount + observe container resizes
   useLayoutEffect(() => {
     measureSlideWidth();
     if (!containerRef.current) return;
@@ -134,22 +139,8 @@ export function OptiSwiper({
     return () => ro.disconnect();
   }, [measureSlideWidth]);
 
-  // Re-measure and re-position when slidesPerView prop changes
-  useEffect(() => {
-    measureSlideWidth();
-    const newMax = Math.max(
-      0,
-      slideCountRef.current - slidesPerViewRef.current,
-    );
-    maxIndexRef.current = newMax;
-    if (currentIndexRef.current > newMax) currentIndexRef.current = newMax;
-    // Jump to corrected position without animation
-    snapTrack(currentIndexRef.current, false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slidesPerView]);
-
-  // Context value — only changes when slideWidth changes (avoids unnecessary re-renders)
-  const contextValue = useMemo(() => ({ slideWidth }), [slideWidth]);
+  // ── Reactive currentIndex state — for Navigation and Pagination UI ────────
+  const [currentIndex, setCurrentIndex] = useState(0);
 
   // ── Transform-based positioning ───────────────────────────────────────────
   const getComputedSlideWidth = useCallback(
@@ -160,7 +151,6 @@ export function OptiSwiper({
     [],
   );
 
-  /** Move track to `index`, optionally with a CSS ease-out snap animation. */
   const snapTrack = useCallback(
     (index: number, animate: boolean) => {
       const track = trackRef.current;
@@ -183,6 +173,100 @@ export function OptiSwiper({
     [getComputedSlideWidth],
   );
 
+  // Re-measure and re-position when slidesPerView prop changes
+  useEffect(() => {
+    measureSlideWidth();
+    const newMax = Math.max(
+      0,
+      slideCountRef.current - slidesPerViewRef.current,
+    );
+    maxIndexRef.current = newMax;
+    const corrected = Math.min(currentIndexRef.current, newMax);
+    currentIndexRef.current = corrected;
+    setCurrentIndex(corrected);
+    snapTrack(corrected, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slidesPerView]);
+
+  // ── Central navigation function — single source of truth ─────────────────
+  const navigateToIndex = useCallback(
+    (nextIndex: number, source: "drag" | "button" | "pagination" | "auto") => {
+      const clamped = Math.max(0, Math.min(maxIndexRef.current, nextIndex));
+      const from = currentIndexRef.current;
+
+      if (clamped === from) {
+        if (source === "drag") snapTrack(clamped, true); // snap back
+        return;
+      }
+
+      const direction = clamped > from ? "right" : "left";
+      currentIndexRef.current = clamped;
+      setCurrentIndex(clamped);
+      markViewed(clamped);
+
+      // onSlide fires for every navigation type
+      handlersRef.current.onSlide(buildSlidePayload(direction, from, clamped));
+
+      // Source-specific events
+      if (source === "button") {
+        handlersRef.current.onNavButtonClick(
+          buildNavButtonPayload(direction, from, clamped),
+        );
+      }
+      if (source === "pagination") {
+        handlersRef.current.onPaginationClick(
+          buildPaginationClickPayload(from, clamped),
+        );
+      }
+
+      // Auto-scroll loops — don't fire terminal events on wrap-around
+      if (source !== "auto" && clamped === maxIndexRef.current) {
+        fireTerminalIfNeeded("reachedEnd");
+      }
+
+      snapTrack(clamped, true);
+    },
+    [markViewed, fireTerminalIfNeeded, snapTrack],
+  );
+
+  // ── Context value ─────────────────────────────────────────────────────────
+  // goToIndex is the narrow public surface exposed to Navigation / Pagination
+  const goToIndex = useCallback(
+    (index: number, source: "button" | "pagination") => {
+      navigateToIndex(index, source);
+    },
+    [navigateToIndex],
+  );
+
+  const contextValue = useMemo(
+    () => ({ slideWidth, currentIndex, maxIndex, goToIndex }),
+    [slideWidth, currentIndex, maxIndex, goToIndex],
+  );
+
+  // ── Auto-scroll ───────────────────────────────────────────────────────────
+  // Paused during pointer drag so gestures don't fight auto-scroll
+  const autoScrollPausedRef = useRef(false);
+
+  useEffect(() => {
+    if (!autoScroll?.enabled) return;
+
+    const tick = () => {
+      if (autoScrollPausedRef.current) return;
+      const from = currentIndexRef.current;
+      const next = from >= maxIndexRef.current ? 0 : from + 1; // loop
+      const direction: "left" | "right" = next > from ? "right" : "left";
+
+      currentIndexRef.current = next;
+      setCurrentIndex(next);
+      markViewed(next);
+      handlersRef.current.onSlide(buildSlidePayload(direction, from, next));
+      snapTrack(next, true);
+    };
+
+    const timer = setInterval(tick, autoScroll.interval);
+    return () => clearInterval(timer);
+  }, [autoScroll?.enabled, autoScroll?.interval, markViewed, snapTrack]);
+
   // ── Drag state (refs only — zero React re-renders during gesture) ─────────
   const dragStartX = useRef<number | null>(null);
   const dragStartY = useRef<number | null>(null);
@@ -198,7 +282,7 @@ export function OptiSwiper({
     dragVelocityX.current = 0;
     lastPointerX.current = e.clientX;
     lastPointerTime.current = Date.now();
-    // Capture pointer so we receive events even when it leaves the element
+    autoScrollPausedRef.current = true;
     e.currentTarget.setPointerCapture(e.pointerId);
     if (trackRef.current) trackRef.current.style.transition = "";
   }, []);
@@ -210,18 +294,16 @@ export function OptiSwiper({
       const dx = e.clientX - dragStartX.current;
       const dy = e.clientY - (dragStartY.current ?? e.clientY);
 
-      // Lock drag axis on first significant movement
       if (!isDraggingRef.current) {
-        if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return; // too small — wait
+        if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
         if (Math.abs(dy) > Math.abs(dx)) {
-          // Primarily vertical — let the browser handle page scroll
           dragStartX.current = null;
+          autoScrollPausedRef.current = false;
           return;
         }
         isDraggingRef.current = true;
       }
 
-      // Rolling velocity estimate
       const now = Date.now();
       const dt = now - lastPointerTime.current;
       if (dt > 0)
@@ -229,7 +311,6 @@ export function OptiSwiper({
       lastPointerTime.current = now;
       lastPointerX.current = e.clientX;
 
-      // Rubber-band resistance at edges
       const atStart = currentIndexRef.current <= 0 && dx > 0;
       const atEnd = currentIndexRef.current >= maxIndexRef.current && dx < 0;
       const delta = atStart || atEnd ? dx / 3 : dx;
@@ -244,6 +325,8 @@ export function OptiSwiper({
 
   const commitDrag = useCallback(
     (endX: number) => {
+      autoScrollPausedRef.current = false;
+
       if (dragStartX.current === null || !isDraggingRef.current) {
         dragStartX.current = null;
         isDraggingRef.current = false;
@@ -263,25 +346,9 @@ export function OptiSwiper({
         dragVelocityX.current,
       );
 
-      const from = currentIndexRef.current;
-      if (nextIndex !== from) {
-        currentIndexRef.current = nextIndex;
-        markViewed(nextIndex);
-        handlersRef.current.onSlide(
-          buildSlidePayload(
-            nextIndex > from ? "right" : "left",
-            from,
-            nextIndex,
-          ),
-        );
-        if (nextIndex === maxIndexRef.current) {
-          fireTerminalIfNeeded("reachedEnd");
-        }
-      }
-
-      snapTrack(currentIndexRef.current, true);
+      navigateToIndex(nextIndex, "drag");
     },
-    [getComputedSlideWidth, snapTrack, markViewed, fireTerminalIfNeeded],
+    [getComputedSlideWidth, navigateToIndex],
   );
 
   const onPointerUp = useCallback(
@@ -290,7 +357,7 @@ export function OptiSwiper({
   );
 
   const onPointerCancel = useCallback(() => {
-    // Snap back to current index without committing a new one
+    autoScrollPausedRef.current = false;
     dragStartX.current = null;
     isDraggingRef.current = false;
     snapTrack(currentIndexRef.current, true);
@@ -351,7 +418,6 @@ export function OptiSwiper({
           style={{
             display: "flex",
             willChange: "transform",
-            // pan-y: browser handles vertical scroll, we handle horizontal drag
             touchAction: "pan-y",
             userSelect: "none",
             cursor: "grab",
@@ -364,6 +430,9 @@ export function OptiSwiper({
         >
           {children}
         </div>
+
+        {navigation && <Navigation config={navigation} />}
+        {pagination && <Pagination config={pagination} />}
       </div>
     </SwiperContext.Provider>
   );

@@ -1,5 +1,7 @@
 import {
   buildInViewportPayload,
+  buildNavButtonPayload,
+  buildPaginationClickPayload,
   buildReachedEndPayload,
   buildSlidePayload,
   buildViewedSlidesPayload,
@@ -44,6 +46,25 @@ describe("payload builders", () => {
     expect(p.viewedSeconds).toBe(30);
     expect(p.slides).toHaveLength(1);
   });
+
+  it("buildNavButtonPayload returns correct shape", () => {
+    expect(buildNavButtonPayload("right", 1, 2)).toEqual({
+      event: "carousel_nav_button",
+      direction: "right",
+      fromIndex: 1,
+      toIndex: 2,
+      timestamp: 1_000_000,
+    });
+  });
+
+  it("buildPaginationClickPayload returns correct shape", () => {
+    expect(buildPaginationClickPayload(0, 3)).toEqual({
+      event: "carousel_pagination_click",
+      fromIndex: 0,
+      toIndex: 3,
+      timestamp: 1_000_000,
+    });
+  });
 });
 
 describe("mergeHandlers", () => {
@@ -58,7 +79,7 @@ describe("mergeHandlers", () => {
     spy.mockRestore();
   });
 
-  it("uses custom handler when provided, ignores default", () => {
+  it("uses custom onSlide handler and skips default", () => {
     const spy = jest.spyOn(console, "log").mockImplementation(() => {});
     const customFn = jest.fn();
     const handlers = mergeHandlers({ onSlide: customFn });
@@ -75,8 +96,48 @@ describe("mergeHandlers", () => {
     const handlers = mergeHandlers({ onSlide });
     handlers.onInViewport(buildInViewportPayload());
     handlers.onSlide(buildSlidePayload("right", 0, 1));
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledTimes(1); // only onInViewport used default
     expect(onSlide).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it("uses custom onNavButtonClick handler", () => {
+    const spy = jest.spyOn(console, "log").mockImplementation(() => {});
+    const onNavButtonClick = jest.fn();
+    const handlers = mergeHandlers({ onNavButtonClick });
+    handlers.onNavButtonClick(buildNavButtonPayload("right", 0, 1));
+    expect(onNavButtonClick).toHaveBeenCalledTimes(1);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("uses custom onPaginationClick handler", () => {
+    const spy = jest.spyOn(console, "log").mockImplementation(() => {});
+    const onPaginationClick = jest.fn();
+    const handlers = mergeHandlers({ onPaginationClick });
+    handlers.onPaginationClick(buildPaginationClickPayload(0, 3));
+    expect(onPaginationClick).toHaveBeenCalledTimes(1);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("default onNavButtonClick logs to console", () => {
+    const spy = jest.spyOn(console, "log").mockImplementation(() => {});
+    mergeHandlers().onNavButtonClick(buildNavButtonPayload("left", 2, 1));
+    expect(spy).toHaveBeenCalledWith(
+      "[OptiSwiper] carousel_nav_button",
+      expect.objectContaining({ event: "carousel_nav_button" }),
+    );
+    spy.mockRestore();
+  });
+
+  it("default onPaginationClick logs to console", () => {
+    const spy = jest.spyOn(console, "log").mockImplementation(() => {});
+    mergeHandlers().onPaginationClick(buildPaginationClickPayload(1, 4));
+    expect(spy).toHaveBeenCalledWith(
+      "[OptiSwiper] carousel_pagination_click",
+      expect.objectContaining({ event: "carousel_pagination_click" }),
+    );
     spy.mockRestore();
   });
 });

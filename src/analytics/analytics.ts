@@ -1,6 +1,8 @@
 import type {
   AnalyticsHandlers,
   InViewportPayload,
+  NavigationButtonPayload,
+  PaginationClickPayload,
   ReachedEndPayload,
   SlideData,
   SlidePayload,
@@ -22,6 +24,12 @@ const defaultHandlers: ResolvedHandlers = {
   onViewedSlides(payload: ViewedSlidesPayload) {
     console.log("[OptiSwiper] carousel_viewed_slides", payload);
   },
+  onNavButtonClick(payload: NavigationButtonPayload) {
+    console.log("[OptiSwiper] carousel_nav_button", payload);
+  },
+  onPaginationClick(payload: PaginationClickPayload) {
+    console.log("[OptiSwiper] carousel_pagination_click", payload);
+  },
 };
 
 export function mergeHandlers(custom?: AnalyticsHandlers): ResolvedHandlers {
@@ -30,6 +38,10 @@ export function mergeHandlers(custom?: AnalyticsHandlers): ResolvedHandlers {
     onSlide: custom?.onSlide ?? defaultHandlers.onSlide,
     onReachedEnd: custom?.onReachedEnd ?? defaultHandlers.onReachedEnd,
     onViewedSlides: custom?.onViewedSlides ?? defaultHandlers.onViewedSlides,
+    onNavButtonClick:
+      custom?.onNavButtonClick ?? defaultHandlers.onNavButtonClick,
+    onPaginationClick:
+      custom?.onPaginationClick ?? defaultHandlers.onPaginationClick,
   };
 }
 
@@ -63,6 +75,32 @@ export function buildViewedSlidesPayload(
     event: "carousel_viewed_slides",
     slides,
     viewedSeconds,
+    timestamp: Date.now(),
+  };
+}
+
+export function buildNavButtonPayload(
+  direction: "left" | "right",
+  fromIndex: number,
+  toIndex: number,
+): NavigationButtonPayload {
+  return {
+    event: "carousel_nav_button",
+    direction,
+    fromIndex,
+    toIndex,
+    timestamp: Date.now(),
+  };
+}
+
+export function buildPaginationClickPayload(
+  fromIndex: number,
+  toIndex: number,
+): PaginationClickPayload {
+  return {
+    event: "carousel_pagination_click",
+    fromIndex,
+    toIndex,
     timestamp: Date.now(),
   };
 }
