@@ -52,6 +52,8 @@ function makeHandlers(): jest.Mocked<Required<AnalyticsHandlers>> {
     onSlide: jest.fn(),
     onReachedEnd: jest.fn(),
     onViewedSlides: jest.fn(),
+    onNavButtonClick: jest.fn(),
+    onPaginationClick: jest.fn(),
   };
 }
 
